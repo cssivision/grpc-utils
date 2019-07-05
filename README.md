@@ -1,1 +1,1 @@
-# grpc_etcd_resolver
+# grpc utils

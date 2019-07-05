@@ -1,0 +1,1 @@
+# resolver base on etcd

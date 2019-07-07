@@ -28,6 +28,7 @@ func (b *GrpcResolverBuilder) Build(target resolver.Target, cc resolver.ClientCo
 		return nil, err
 	}
 
+	go r.watch()
 	return r, nil
 }
 
@@ -41,6 +42,7 @@ type GrpcResolver struct {
 	client   *clientv3.Client
 	cc       resolver.ClientConn
 	endpoint string
+	wch      clientv3.WatchChan
 }
 
 // Update ...
@@ -49,6 +51,8 @@ type Update struct {
 	Addr string
 	// meta data
 	Metadata map[string]interface{}
+	// op
+	Op int
 }
 
 func (gr *GrpcResolver) start() error {
@@ -76,11 +80,39 @@ func (gr *GrpcResolver) start() error {
 	gr.cc.UpdateState(resolver.State{
 		Addresses: addrs,
 	})
+
+	opts := []clientv3.OpOption{clientv3.WithRev(resp.Header.Revision + 1), clientv3.WithPrefix(), clientv3.WithPrevKV()}
+	gr.wch = gr.client.Watch(context.Background(), gr.endpoint+"/", opts...)
 	return nil
 }
 
-func (*GrpcResolver) watch() {
+func (gr *GrpcResolver) watch() {
+	for {
+		wr, ok := <-gr.wch
+		if !ok {
+			continue
+		}
 
+		addresses := make([]resolver.Address, 0, len(wr.Events))
+		for _, e := range wr.Events {
+			var jupdate Update
+			var err error
+			switch e.Type {
+			case clientv3.EventTypePut:
+				err = json.Unmarshal(e.Kv.Value, &jupdate)
+			case clientv3.EventTypeDelete:
+				err = json.Unmarshal(e.PrevKv.Value, &jupdate)
+			default:
+				continue
+			}
+			if err == nil {
+				addresses = append(addresses, resolver.Address{
+					Addr:     jupdate.Addr,
+					Metadata: jupdate.Metadata,
+				})
+			}
+		}
+	}
 }
 
 // Close ...
